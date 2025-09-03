@@ -39,15 +39,12 @@ export default function Header({ className = "" }: { className?: string }) {
     return () => unsubscribe();
   }, []);
 
-  const gradientClass = gradient
-    ? `bg-gradient-to-b ${gradient}`
-    : "bg-gray-100";
+  const gradientClass = gradient ? `bg-gradient-to-b ${gradient}` : "bg-gray-100";
 
   // ダーク判定（brandH, brandG, brandI）
   const darkKeys: ThemeKey[] = ["brandH", "brandG", "brandI"];
-  const currentKey = (Object.entries(THEMES).find(
-    ([, v]) => v === gradient
-  )?.[0] ?? null) as ThemeKey | null;
+  const currentKey = (Object.entries(THEMES).find(([, v]) => v === gradient)?.[0] ??
+    null) as ThemeKey | null;
   const isDark = currentKey ? darkKeys.includes(currentKey) : false;
 
   const textColor = isDark ? "text-white" : "text-black";
@@ -61,7 +58,7 @@ export default function Header({ className = "" }: { className?: string }) {
     { href: "/about", label: "ままのて保育ステーションについて" },
     { href: "/blog", label: "ブログ" },
     { href: "/news", label: "お知らせ・イベント" },
-    // 外部
+    // 外部（予約・問合せ）
     {
       href: "https://line.me/R/ti/p/@189noyie?ts=05050417&oat_content=url",
       label: "お問い合わせ（LINE）",
@@ -76,13 +73,7 @@ export default function Header({ className = "" }: { className?: string }) {
     { href: "/login", label: "管理者ログイン" },
   ];
 
-  function MenuLink({
-    item,
-    onClick,
-  }: {
-    item: MenuItem;
-    onClick?: () => void;
-  }) {
+  function MenuLink({ item, onClick }: { item: MenuItem; onClick?: () => void }) {
     const inner = (
       <div className="leading-tight text-center">
         <div className={clsx("text-base md:text-lg font-semibold", textColor)}>
@@ -119,7 +110,7 @@ export default function Header({ className = "" }: { className?: string }) {
   return (
     <header
       className={clsx(
-        "sticky top-0 z-30 flex items-center justify-between px-4 h-12",
+        "sticky top-0 z-30 flex items-center justify-between px-2 sm:px-4 h-12",
         gradientClass,
         className,
         !isDark && "border-b border-gray-300"
@@ -130,7 +121,7 @@ export default function Header({ className = "" }: { className?: string }) {
       <Link
         href="/"
         className={clsx(
-          "text-md font-bold flex items-center gap-2 py-2 hover:opacity-80",
+          "min-w-0 text-md font-bold flex items-center gap-2 py-2 hover:opacity-80",
           textColor
         )}
         aria-label="ホーム"
@@ -139,17 +130,20 @@ export default function Header({ className = "" }: { className?: string }) {
           <Image
             src={logoUrl}
             alt="ままのて保育ステーション ロゴ"
-            width={48}
-            height={48}
-            className="w-12 h-12 object-contain transition-opacity duration-200"
+            width={40}
+            height={40}
+            className="w-10 h-10 sm:w-12 sm:h-12 object-contain transition-opacity duration-200 shrink-0"
             unoptimized
           />
         )}
-        ままのて保育ステーション
+        <span className="truncate max-w-[52vw] sm:max-w-none">
+          ままのて保育ステーション
+        </span>
       </Link>
 
-      {/* 右側：クイックリンク（Instagram／LINE） */}
-      <nav className="hidden sm:flex items-center gap-3 ml-auto mr-2">
+      {/* 右側：クイックリンク（スマホでも表示する） */}
+      <nav className="flex items-center gap-2 ml-auto mr-3 sm:gap-3 sm:mr-2 ">
+        {/* Instagram */}
         <a
           href="https://www.instagram.com/mamanote_hoiku.sta?igsh=eGt3MGR5NGp2azB1&utm_source=qr"
           target="_blank"
@@ -160,13 +154,14 @@ export default function Header({ className = "" }: { className?: string }) {
           <Image
             src="/instagram-logo.png"
             alt="Instagramで見る"
-            width={96}
-            height={28}
-            className="h-7 w-auto object-contain rounded-md"
+            width={24}
+            height={24}
+            className="h-9 w-9 sm:h-7 sm:w-7 object-contain rounded-md"
             unoptimized
           />
         </a>
 
+        {/* LINE */}
         <a
           href="https://line.me/R/ti/p/@189noyie?ts=05050417&oat_content=url"
           target="_blank"
@@ -177,9 +172,9 @@ export default function Header({ className = "" }: { className?: string }) {
           <Image
             src="/line-logo.png"
             alt="LINEでつながる"
-            width={28}
-            height={28}
-            className="h-7 w-auto object-contain rounded-md"
+            width={24}
+            height={24}
+            className="h-9 w-9 sm:h-7 sm:w-7 object-contain rounded-md"
             unoptimized
           />
         </a>
@@ -193,12 +188,12 @@ export default function Header({ className = "" }: { className?: string }) {
               variant="ghost"
               size="icon"
               className={clsx(
-                "w-7 h-7 border-2",
+                "w-8 h-8 border-2",
                 isDark ? "text-white border-white" : "text-black border-black"
               )}
               aria-label="メニューを開く"
             >
-              <Menu size={26} />
+              <Menu size={22} />
             </Button>
           </SheetTrigger>
 
@@ -224,10 +219,46 @@ export default function Header({ className = "" }: { className?: string }) {
               </SheetTitle>
             </SheetHeader>
 
+            {/* スマホ専用クイックリンク（ドロワー上部） */}
+            <div className="sm:hidden px-4 pb-3 flex items-center justify-center gap-4">
+              <a
+                href="https://www.instagram.com/mamanote_hoiku.sta?igsh=eGt3MGR5NGp2azB1&utm_source=qr"
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="Instagramで見る"
+                className="inline-flex rounded-full hover:opacity-80 transition"
+              >
+                <Image
+                  src="/instagram-logo.png"
+                  alt="Instagramで見る"
+                  width={36}
+                  height={36}
+                  className="h-9 w-9"
+                  unoptimized
+                />
+              </a>
+              <a
+                href="https://line.me/R/ti/p/@189noyie?ts=05050417&oat_content=url"
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="LINEでつながる"
+                className="inline-flex rounded-full hover:opacity-80 transition"
+              >
+                <Image
+                  src="/line-logo.png"
+                  alt="LINEでつながる"
+                  width={36}
+                  height={36}
+                  className="h-9 w-9"
+                  unoptimized
+                />
+              </a>
+            </div>
+
             {/* ▼ 区切り線 */}
             <div className={clsx("h-px mx-4", sepColor)} />
 
-            {/* 上段：通常メニュー */}
+            {/* 上段：通常メニュー（スクロール領域） */}
             <div className="flex-1 min-h-0 overflow-y-auto">
               <div className="flex flex-col items-center text-center space-y-2 md:space-y-3 px-2 py-2">
                 {menuItems.map((item) => (
