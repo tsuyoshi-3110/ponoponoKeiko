@@ -58,7 +58,7 @@ export default function Header({ className = "" }: { className?: string }) {
     { href: "/", label: "ホーム" },
     { href: "/products", label: "サービス・プログラム" },
     { href: "/stores", label: "施設情報（所在地・アクセス）" },
-    { href: "/about", label: "当園の想い" },
+    { href: "/about", label: "私たちの想い" },
     { href: "/blog", label: "ブログ" },
     { href: "/news", label: "お知らせ・イベント" },
     // 外部（予約・問合せ）
