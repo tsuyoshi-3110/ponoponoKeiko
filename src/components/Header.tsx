@@ -39,12 +39,15 @@ export default function Header({ className = "" }: { className?: string }) {
     return () => unsubscribe();
   }, []);
 
-  const gradientClass = gradient ? `bg-gradient-to-b ${gradient}` : "bg-gray-100";
+  const gradientClass = gradient
+    ? `bg-gradient-to-b ${gradient}`
+    : "bg-gray-100";
 
   // ダーク判定（brandH, brandG, brandI）
   const darkKeys: ThemeKey[] = ["brandH", "brandG", "brandI"];
-  const currentKey = (Object.entries(THEMES).find(([, v]) => v === gradient)?.[0] ??
-    null) as ThemeKey | null;
+  const currentKey = (Object.entries(THEMES).find(
+    ([, v]) => v === gradient
+  )?.[0] ?? null) as ThemeKey | null;
   const isDark = currentKey ? darkKeys.includes(currentKey) : false;
 
   const textColor = isDark ? "text-white" : "text-black";
@@ -55,7 +58,7 @@ export default function Header({ className = "" }: { className?: string }) {
     { href: "/", label: "ホーム" },
     { href: "/products", label: "サービス・プログラム" },
     { href: "/stores", label: "施設情報（所在地・アクセス）" },
-    { href: "/about", label: "ままのて保育ステーションについて" },
+    { href: "/about", label: "当園の想い" },
     { href: "/blog", label: "ブログ" },
     { href: "/news", label: "お知らせ・イベント" },
     // 外部（予約・問合せ）
@@ -73,7 +76,13 @@ export default function Header({ className = "" }: { className?: string }) {
     { href: "/login", label: "管理者ログイン" },
   ];
 
-  function MenuLink({ item, onClick }: { item: MenuItem; onClick?: () => void }) {
+  function MenuLink({
+    item,
+    onClick,
+  }: {
+    item: MenuItem;
+    onClick?: () => void;
+  }) {
     const inner = (
       <div className="leading-tight text-center">
         <div className={clsx("text-base md:text-lg font-semibold", textColor)}>
