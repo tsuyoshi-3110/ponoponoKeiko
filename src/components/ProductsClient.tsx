@@ -19,6 +19,7 @@ import {
   orderBy,
   startAfter,
   getDocs,
+  QueryDocumentSnapshot,
 } from "firebase/firestore";
 import {
   getStorage,
@@ -53,11 +54,13 @@ import { motion } from "framer-motion";
 import { type Product } from "@/types/Product";
 import ProductMedia from "./ProductMedia";
 import { SITE_KEY } from "@/lib/atoms/siteKeyAtom";
+import { Pin } from "lucide-react";
 
 type MediaType = "image" | "video";
 const MAX_ITEMS = 20;
 const MAX_VIDEO_SEC = 60;
-/** MIME リスト（← as const を外す）*/
+
+/* MIME */
 const VIDEO_MIME_TYPES: string[] = [
   "video/mp4",
   "video/quicktime",
@@ -77,6 +80,8 @@ const IMAGE_MIME_TYPES: string[] = [
   "image/gif",
 ];
 
+
+
 export default function ProductsClient() {
   const [list, setList] = useState<Product[]>([]);
   const [isAdmin, setIsAdmin] = useState(false);
@@ -85,8 +90,6 @@ export default function ProductsClient() {
   const [file, setFile] = useState<File | null>(null);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
-  // const [price, setPrice] = useState<number | "">("");
-  // const [taxIncluded, setTaxIncluded] = useState(true); // デフォルト税込
   const [progress, setProgress] = useState<number | null>(null);
   const uploading = progress !== null;
 
@@ -94,17 +97,18 @@ export default function ProductsClient() {
   const [showKeywordInput, setShowKeywordInput] = useState(false);
   const [keywords, setKeywords] = useState<string[]>([]);
 
-  const [lastVisible, setLastVisible] = useState<DocumentData | null>(null);
+  const [lastVisible, setLastVisible] =
+    useState<QueryDocumentSnapshot<DocumentData> | null>(null);
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
+
+
 
   const gradient = useThemeGradient();
   const router = useRouter();
 
   const sensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: { distance: 5 },
-    }),
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
     useSensor(TouchSensor, {
       activationConstraint: { delay: 250, tolerance: 5 },
     })
@@ -121,79 +125,82 @@ export default function ProductsClient() {
     []
   );
 
-  // const jaCollator = useMemo(
-  //   () => new Intl.Collator("ja-JP", { numeric: true, sensitivity: "base" }),
-  //   []
-  // );
-
   useEffect(() => onAuthStateChanged(auth, (u) => setIsAdmin(!!u)), []);
 
+  /* 編集モード時は既存値をプリセット */
   useEffect(() => {
-    const q = query(colRef, orderBy("order"), limit(MAX_ITEMS));
+    if (formMode === "edit" && editing) {
+      setTitle(editing.title ?? "");
+      setBody(editing.body ?? "");
+    }
+  }, [formMode, editing]);
 
-    /* ❶ ここで購読開始 ─ 最初のページはずっとリアルタイムで受信 */
-    const unsubscribe = onSnapshot(q, (snap) => {
-      const docs = snap.docs.map((d) => ({
+  useEffect(() => {
+    const q1 = query(colRef, orderBy("order"), limit(MAX_ITEMS));
+    const unsub = onSnapshot(q1, (snap) => {
+      const firstPage = snap.docs.map((d) => ({
         id: d.id,
-        ...d.data(),
+        ...(d.data() as any),
       })) as Product[];
 
-      setList(docs);
+      setList((prev) => {
+        // 既存も含めて ID で一意化
+        const map = new Map<string, Product>(prev.map((p) => [p.id, p]));
+        firstPage.forEach((p) => map.set(p.id, p));
+        // order 昇順で安全に並べ替え
+        return [...map.values()].sort(
+          (a, b) => (a.order ?? 9999) - (b.order ?? 9999)
+        );
+      });
+
       setLastVisible(snap.docs.at(-1) ?? null);
       setHasMore(snap.docs.length === MAX_ITEMS);
-
-      /* ⭐ 解除はここでは呼ばない */
     });
-
-    /* ❷ コンポーネントが unmount されたときだけリスナーを外す */
-    return () => unsubscribe();
+    return () => unsub();
   }, [colRef]);
 
   const loadMore = useCallback(async () => {
-    if (!lastVisible || loadingMore) return;
-
+    if (!lastVisible || loadingMore || !hasMore) return;
     setLoadingMore(true);
+    try {
+      const q2 = query(
+        colRef,
+        orderBy("order"),
+        startAfter(lastVisible),
+        limit(MAX_ITEMS)
+      );
+      const snap = await getDocs(q2);
+      const nextPage = snap.docs.map((d) => ({
+        id: d.id,
+        ...(d.data() as any),
+      })) as Product[];
 
-    const q = query(
-      colRef,
-      orderBy("order"),
-      startAfter(lastVisible), // ← 前ページの末尾から続き
-      limit(MAX_ITEMS)
-    );
+      setList((prev) => {
+        const map = new Map<string, Product>(prev.map((p) => [p.id, p]));
+        nextPage.forEach((p) => map.set(p.id, p));
+        return [...map.values()].sort(
+          (a, b) => (a.order ?? 9999) - (b.order ?? 9999)
+        );
+      });
 
-    const snap = await getDocs(q);
-
-    // 現在表示中のIDセットを作成
-    const existingIds = new Set(list.map((item) => item.id));
-
-    // 取得した新しいドキュメントのうち、既に存在していないものだけ抽出
-    const newDocs = snap.docs
-      .map((doc) => ({
-        id: doc.id,
-        ...doc.data(),
-      }))
-      .filter((item) => !existingIds.has(item.id)) as Product[];
-
-    // 新しいものだけ追加
-    setList((prev) => [...prev, ...newDocs]);
-    setLastVisible(snap.docs[snap.docs.length - 1] ?? null);
-    setHasMore(snap.docs.length === MAX_ITEMS);
-    setLoadingMore(false);
-  }, [lastVisible, loadingMore, colRef, list]);
+      setLastVisible(snap.docs.at(-1) ?? null);
+      setHasMore(snap.docs.length === MAX_ITEMS);
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [colRef, lastVisible, loadingMore, hasMore]);
 
   useEffect(() => {
     const handleScroll = () => {
       const nearBottom =
         window.innerHeight + window.scrollY >= document.body.offsetHeight - 300;
-
-      if (nearBottom && !loadingMore && hasMore) {
-        loadMore();
-      }
+      if (nearBottom && !loadingMore && hasMore) loadMore();
     };
-
     window.addEventListener("scroll", handleScroll);
     return () => window.removeEventListener("scroll", handleScroll);
   }, [loadMore, loadingMore, hasMore]);
+
+
 
   const saveProduct = async () => {
     if (uploading) return;
@@ -212,11 +219,12 @@ export default function ProductsClient() {
         const isVideo = file.type.startsWith("video/");
         mediaType = isVideo ? "video" : "image";
 
-        const isValidVideo = VIDEO_MIME_TYPES.includes(file.type); // ✅広がった判定
+        const isValidVideo = VIDEO_MIME_TYPES.includes(file.type);
         const isValidImage = IMAGE_MIME_TYPES.includes(file.type);
-
         if (!isValidImage && !isValidVideo) {
-          alert("対応形式：画像（JPEG, PNG）／動画（MP4, MOV）");
+          alert(
+            "対応形式：画像（JPEG, PNG, WEBP, GIF）／動画（MP4, MOV, WebM 他）"
+          );
           return;
         }
 
@@ -240,7 +248,6 @@ export default function ProductsClient() {
           getStorage(),
           `products/public/${SITE_KEY}/${id}.${ext}`
         );
-
         const task = uploadBytesResumable(storageRef, uploadFile, {
           contentType: isVideo ? file.type : "image/jpeg",
         });
@@ -275,22 +282,13 @@ export default function ProductsClient() {
         originalFileName?: string;
       };
 
-      const payload: ProductPayload = {
-        title,
-        body,
-        mediaURL,
-        mediaType,
-      };
-
+      const payload: ProductPayload = { title, body, mediaURL, mediaType };
       const originalFileName = file?.name || editing?.originalFileName;
-      if (originalFileName) {
-        payload.originalFileName = originalFileName;
-      }
+      if (originalFileName) payload.originalFileName = originalFileName;
 
       if (formMode === "edit" && editing) {
         await updateDoc(doc(colRef, id), payload);
       } else {
-        // 最も小さいorderを取得して先頭にする
         const q = query(colRef, orderBy("order"), limit(1));
         const snap = await getDocs(q);
         const first = snap.docs[0];
@@ -322,7 +320,7 @@ export default function ProductsClient() {
     setTimeout(() => {
       resetFields();
       setFormMode(null);
-    }, 100); // 少しだけ遅延させるとUIフリーズ対策になる
+    }, 100);
   };
 
   const resetFields = () => {
@@ -381,67 +379,73 @@ export default function ProductsClient() {
           strategy={verticalListSortingStrategy}
         >
           <div className="grid grid-cols-2 gap-6 sm:grid-cols-2 lg:grid-cols-2 items-stretch">
-            {list.map((p) => {
-              return (
-                <SortableItem key={p.id} product={p}>
-                  {({ listeners, attributes, isDragging }) => (
-                    <motion.div
-                      initial={{ opacity: 0, scale: 0.9, y: 20 }}
-                      animate={{ opacity: 1, scale: 1, y: 0 }}
-                      exit={{ opacity: 0, scale: 0.95, y: 20 }}
-                      transition={{ duration: 0.3 }}
-                      onClick={() => {
-                        if (isDragging) return;
-                        router.push(`/products/${p.id}`);
-                      }}
-                      className={clsx(
-                        "flex flex-col h-full border rounded-lg overflow-hidden shadow-xl relative transition-colors duration-200",
-                        "bg-gradient-to-b",
-                        gradient,
-                        isDragging
-                          ? "bg-yellow-100"
-                          : isDark
-                          ? "bg-black/40 text-white"
-                          : "bg-white",
-                        "cursor-pointer",
-                        !isDragging && "hover:shadow-lg"
-                      )}
-                    >
-                      {auth.currentUser !== null && (
+            {list.map((p) => (
+              <SortableItem key={p.id} product={p}>
+                {({ listeners, attributes, isDragging }) => (
+                  <motion.div
+                    initial={{ opacity: 0, scale: 0.9, y: 20 }}
+                    animate={{ opacity: 1, scale: 1, y: 0 }}
+                    exit={{ opacity: 0, scale: 0.95, y: 20 }}
+                    transition={{ duration: 0.3 }}
+                    onClick={() => {
+                      if (isDragging) return;
+                      router.push(`/products/${p.id}`);
+                    }}
+                    className={clsx(
+                      "flex flex-col h-full border rounded-lg shadow-xl relative overflow-visible transition-colors duration-200",
+                      "bg-gradient-to-b",
+                      gradient,
+                      isDragging
+                        ? "bg-yellow-100"
+                        : isDark
+                        ? "bg-black/40 text-white"
+                        : "bg-white",
+                      "cursor-pointer",
+                      !isDragging && "hover:shadow-lg"
+                    )}
+                  >
+                    {auth.currentUser !== null && (
+                      <div
+                        {...attributes}
+                        {...listeners}
+                        // クリックだけ親に伝播させない（ドラッグは listeners に任せる）
+                        onClick={(e) => e.stopPropagation()}
+                        className="absolute left-1/2 top-0 -translate-x-1/2 -translate-y-1/2
+               z-30 cursor-grab active:cursor-grabbing select-none"
+                      >
                         <div
-                          {...attributes}
-                          {...listeners}
-                          onTouchStart={(e) => e.preventDefault()}
-                          className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-20 cursor-grab active:cursor-grabbing touch-none select-none"
+                          className="w-10 h-10 rounded-full bg-white/95 border border-black/10
+                    text-gray-700 text-sm flex items-center justify-center shadow-lg"
                         >
-                          <div className="w-10 h-10 bg-gray-200 text-gray-700 rounded-full text-sm flex items-center justify-center shadow">
-                            ≡
-                          </div>
+                          <Pin />
                         </div>
-                      )}
-
-                      <ProductMedia
-                        src={p.mediaURL}
-                        type={p.mediaType}
-                        className="shadow-lg" /* 追加スタイルがあれば */
-                        /* autoPlay / loop / muted はデフォルト true。変更する場合だけ渡す */
-                      />
-
-                      {/* 商品情報 */}
-                      <div className="p-3 space-y-2">
-                        <h2
-                          className={clsx("text-sm font-bold", {
-                            "text-white": isDark,
-                          })}
-                        >
-                          {p.title}
-                        </h2>
                       </div>
-                    </motion.div>
-                  )}
-                </SortableItem>
-              );
-            })}
+                    )}
+
+                    <ProductMedia
+                      src={p.mediaURL}
+                      type={p.mediaType}
+                      className="shadow-lg"
+                    />
+
+                    {/* 商品情報 */}
+                    <div className="p-3 space-y-2">
+                      {/* ✅ 改行をそのまま表示 */}
+                      <h2
+                        className={clsx(
+                          "text-sm font-bold whitespace-pre-wrap",
+                          {
+                            "text-white": isDark,
+                          }
+                        )}
+                      >
+                        {p.title}
+                      </h2>
+                    </div>
+                  </motion.div>
+                )}
+              </SortableItem>
+            ))}
           </div>
         </SortableContext>
       </DndContext>
@@ -464,9 +468,9 @@ export default function ProductsClient() {
               {formMode === "edit" ? "編集" : "新規追加"}
             </h2>
 
+            {/* ✅ タイトルは改行可能に */}
             <input
-              type="text"
-              placeholder="タイトル"
+              placeholder="タイトル（改行可）"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               className="w-full border px-3 py-2 rounded"
@@ -533,7 +537,6 @@ export default function ProductsClient() {
                           keywords: validKeywords,
                         }),
                       });
-
                       const data = await res.json();
                       if (data.body) {
                         setBody(data.body);
@@ -584,6 +587,7 @@ export default function ProductsClient() {
                 </button>
               </>
             )}
+
             <label>画像 / 動画 (60秒以内)</label>
             <input
               type="file"
@@ -592,27 +596,25 @@ export default function ProductsClient() {
                 const f = e.target.files?.[0];
                 if (!f) return;
 
-                /* --- 動画かどうか判定 --- */
                 const isVideo = f.type.startsWith("video/");
                 if (!isVideo) {
                   setFile(f);
                   return;
                 }
 
-                /* --- <video> でメタデータだけ読む --- */
                 const blobURL = URL.createObjectURL(f);
                 const vid = document.createElement("video");
                 vid.preload = "metadata";
                 vid.src = blobURL;
 
                 vid.onloadedmetadata = () => {
-                  URL.revokeObjectURL(blobURL); // もう不要
+                  URL.revokeObjectURL(blobURL);
                   if (vid.duration > MAX_VIDEO_SEC) {
                     alert(`動画は ${MAX_VIDEO_SEC} 秒以内にしてください`);
-                    e.target.value = ""; // input をリセット
+                    (e.target as HTMLInputElement).value = "";
                     return;
                   }
-                  setFile(f); // 30 秒以内なら state へ
+                  setFile(f);
                 };
               }}
               className="bg-gray-500 text-white w-full h-10 px-3 py-1 rounded"

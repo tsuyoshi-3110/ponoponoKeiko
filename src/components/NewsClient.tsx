@@ -1,3 +1,4 @@
+// app/(wherever)/NewsClient.tsx
 "use client";
 
 import React, {
@@ -13,12 +14,15 @@ import {
   updateDoc,
   deleteDoc,
   doc,
+  getDocs,
   orderBy,
   query,
+  startAfter,
   limit,
   Timestamp,
+  QueryDocumentSnapshot,
   onSnapshot,
-} from "firebase/firestore"; // ★ getDocs/startAfter/QueryDocumentSnapshot は不要
+} from "firebase/firestore";
 import { onAuthStateChanged, User } from "firebase/auth";
 import { db, auth } from "@/lib/firebase";
 import {
@@ -32,10 +36,12 @@ import { AlertCircle, Plus } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "./ui/alert";
 import CardSpinner from "./CardSpinner";
 import MediaWithSpinner from "./MediaWithSpinner";
+import Image from "next/image";
 import { useThemeGradient } from "@/lib/useThemeGradient";
 import { THEMES, ThemeKey } from "@/lib/themes";
-import { Upload, Image as ImageIcon, Video as VideoIcon } from "lucide-react";
 import { AnimatePresence, motion, useInView } from "framer-motion";
+import { SITE_KEY } from "@/lib/atoms/siteKeyAtom";
+
 
 /* ---------- 型 ---------- */
 interface NewsItem {
@@ -48,6 +54,8 @@ interface NewsItem {
   mediaUrl?: string;
   mediaType?: "image" | "video";
 }
+
+
 
 /* ---------- 定数 ---------- */
 const ALLOWED_IMG = ["image/jpeg", "image/png", "image/webp", "image/gif"];
@@ -64,14 +72,16 @@ const ALLOWED_VIDEO = [
   "video/3gpp2",
 ];
 const MAX_VIDEO_SEC = 30;
-const STORAGE_PATH = "siteNews/ponoponoKeiko/items";
+const STORAGE_PATH = `siteNews/${SITE_KEY}/items`;
 
 const FIRST_LOAD = 20;
 const PAGE_SIZE = 20;
 
 const DARK_KEYS: ThemeKey[] = ["brandG", "brandH", "brandI"];
 
-/* ========================================================= */
+/* =========================================================
+      ここからコンポーネント本体
+========================================================= */
 export default function NewsClient() {
   const gradient = useThemeGradient();
   const isDark = useMemo(
@@ -83,73 +93,119 @@ export default function NewsClient() {
   const [items, setItems] = useState<NewsItem[]>([]);
   const [user, setUser] = useState<User | null>(null);
 
+  /* モーダル入力 */
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
 
+  /* メディア入力 */
   const [draftFile, setDraftFile] = useState<File | null>(null);
-  const [, setPreviewURL] = useState<string | null>(null);
+  const [previewURL, setPreviewURL] = useState<string | null>(null);
 
+  /* 進捗・アップロード */
   const [uploadPct, setUploadPct] = useState<number | null>(null);
   const [uploadTask, setUploadTask] = useState<ReturnType<
     typeof uploadBytesResumable
   > | null>(null);
   const [uploading, setUploading] = useState(false);
 
-  // ★ 旧: lastDoc/hasMore/isFetchingMore を廃止
-  //    新: 表示件数 limit を段階的に増やす
-  const [pageLimit, setPageLimit] = useState(FIRST_LOAD);
+  /* ページネーション */
+  const [lastDoc, setLastDoc] = useState<QueryDocumentSnapshot | null>(null);
   const [hasMore, setHasMore] = useState(true);
+  const isFetchingMore = useRef(false);
+  const loadedMoreRef = useRef(false);
 
+  /* エラー表示 */
   const [alertVisible, setAlertVisible] = useState(false);
 
+  /* AI 本文生成 */
   const [showAIModal, setShowAIModal] = useState(false);
   const [keywords, setKeywords] = useState(["", "", ""]);
   const [aiLoading, setAiLoading] = useState(false);
-  const nonEmptyKeywords = keywords.filter(Boolean);
+  const nonEmptyKeywords = keywords.filter((k) => k.trim() !== "");
+
+
+
 
   /* ---------- Firestore 参照 ---------- */
-  const SITE_KEY = "ponoponoKeiko";
+
   const colRef = useMemo(
     () => collection(db, "siteNews", SITE_KEY, "items"),
     []
   );
 
-  /* ---------- 認証 ---------- */
+  /* ---------- 初期フェッチ & 認証 ---------- */
   useEffect(() => onAuthStateChanged(auth, setUser), []);
 
-  /* ---------- ★ リアルタイム購読 + 疑似ページング（limit を増やす） ---------- */
-  const unsubRef = useRef<(() => void) | null>(null);
+  // 1ページ目を onSnapshot で購読（Map マージで一意化）
   useEffect(() => {
-    // 既存リスナーがあれば解除
-    if (unsubRef.current) unsubRef.current();
+    if (isFetchingMore.current) return;
 
-    // “pageLimit+1” で1件多く取得し、まだ続きを取れるか判定
-    const q = query(colRef, orderBy("createdAt", "desc"), limit(pageLimit + 1));
+    const firstQuery = query(
+      colRef,
+      orderBy("createdAt", "desc"),
+      limit(FIRST_LOAD)
+    );
 
-    const unsub = onSnapshot(q, (snap) => {
-      const docs = snap.docs;
-      setHasMore(docs.length > pageLimit);
-      const slice = docs.slice(0, pageLimit);
-
-      const next: NewsItem[] = slice.map((d) => ({
+    const unsub = onSnapshot(firstQuery, (snap) => {
+      const firstPage: NewsItem[] = snap.docs.map((d) => ({
         id: d.id,
         ...(d.data() as Omit<NewsItem, "id">),
       }));
 
-      setItems(next);
+      setItems((prev) => {
+        const map = new Map<string, NewsItem>(prev.map((x) => [x.id, x]));
+        firstPage.forEach((x) => map.set(x.id, x));
+        return [...map.values()].sort(
+          (a, b) =>
+            (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0)
+        );
+      });
+
+      if (!loadedMoreRef.current) {
+        setLastDoc(snap.docs.at(-1) ?? null);
+      }
+      setHasMore(snap.size === FIRST_LOAD);
     });
 
-    unsubRef.current = unsub;
     return () => unsub();
-  }, [colRef, pageLimit]);
+  }, [colRef]);
 
-  /* ---------- 次ページ（= 表示件数を増やす） ---------- */
-  const fetchNextPage = useCallback(() => {
-    if (!hasMore || uploading) return;
-    setPageLimit((n) => n + PAGE_SIZE);
-  }, [hasMore, uploading]);
+  // 2ページ目以降のフェッチ
+  const fetchNextPage = useCallback(async () => {
+    if (isFetchingMore.current || !hasMore || !lastDoc) return;
+    isFetchingMore.current = true;
+    loadedMoreRef.current = true;
+
+    try {
+      const nextQuery = query(
+        colRef,
+        orderBy("createdAt", "desc"),
+        startAfter(lastDoc),
+        limit(PAGE_SIZE)
+      );
+      const snap = await getDocs(nextQuery);
+      const nextPage: NewsItem[] = snap.docs.map((d) => ({
+        id: d.id,
+        ...(d.data() as Omit<NewsItem, "id">),
+      }));
+
+      setItems((prev) => {
+        const map = new Map<string, NewsItem>(prev.map((x) => [x.id, x]));
+        nextPage.forEach((x) => map.set(x.id, x));
+        return [...map.values()].sort(
+          (a, b) =>
+            (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0)
+        );
+      });
+
+      setLastDoc(snap.docs.at(-1) ?? null);
+      setHasMore(snap.size === PAGE_SIZE);
+    } finally {
+      isFetchingMore.current = false;
+    }
+  }, [colRef, lastDoc, hasMore]);
 
   /* ---------- 無限スクロール ---------- */
   useEffect(() => {
@@ -178,30 +234,26 @@ export default function NewsClient() {
       return;
     }
 
-    // 動画は長さチェックのみ（プレビューはしない）
     if (isVideo) {
       const video = document.createElement("video");
       const blobURL = URL.createObjectURL(file);
       video.preload = "metadata";
       video.src = blobURL;
-
       video.onloadedmetadata = () => {
-        const over = video.duration > MAX_VIDEO_SEC;
-        URL.revokeObjectURL(blobURL); // 使い終わったら解放（プレビューしない）
-
-        if (over) {
+        if (video.duration > MAX_VIDEO_SEC) {
           alert("動画は30秒以内にしてください");
+          URL.revokeObjectURL(blobURL);
           return;
         }
-        setDraftFile(file); // ← これだけでOK
-        // setPreviewURL は使わない
+        setDraftFile(file);
+        setPreviewURL(blobURL);
       };
       return;
     }
 
-    // 画像はそのまま保持（プレビューしない）
+    const blobURL = URL.createObjectURL(file);
     setDraftFile(file);
-    // setPreviewURL は使わない
+    setPreviewURL(blobURL);
   };
 
   /* =====================================================
@@ -214,7 +266,9 @@ export default function NewsClient() {
     setDraftFile(null);
     setPreviewURL(null);
     setModalOpen(true);
+    setAlertVisible(false);
   };
+
   const openEdit = (n: NewsItem) => {
     setEditingId(n.id);
     setTitle(n.title);
@@ -222,12 +276,15 @@ export default function NewsClient() {
     setDraftFile(null);
     setPreviewURL(null);
     setModalOpen(true);
+    setAlertVisible(false);
   };
+
   const closeModal = () => {
     setModalOpen(false);
     setEditingId(null);
     setTitle("");
     setBody("");
+    if (previewURL) URL.revokeObjectURL(previewURL);
     setDraftFile(null);
     setPreviewURL(null);
     setAlertVisible(false);
@@ -242,15 +299,12 @@ export default function NewsClient() {
 
     setUploading(true);
     try {
-      const payload: Partial<NewsItem> = {
-        title,
-        body,
-        ...(editingId
-          ? { updatedAt: Timestamp.now() }
-          : { createdAt: Timestamp.now(), createdBy: user.uid }),
-      };
+      const base: Partial<NewsItem> = { title, body };
+      const payload: Partial<NewsItem> = editingId
+        ? { ...base, updatedAt: Timestamp.now() }
+        : { ...base, createdAt: Timestamp.now(), createdBy: user.uid };
 
-      // アップロード
+      // メディアアップロード
       if (draftFile) {
         const sRef = ref(
           getStorage(),
@@ -282,7 +336,16 @@ export default function NewsClient() {
         await addDoc(colRef, payload as Omit<NewsItem, "id">);
       }
 
-      closeModal();
+      // 成功時：インラインでリセット
+      setModalOpen(false);
+      setEditingId(null);
+      setTitle("");
+      setBody("");
+      if (previewURL) URL.revokeObjectURL(previewURL);
+      setDraftFile(null);
+      setPreviewURL(null);
+      setAlertVisible(false);
+      setKeywords(["", "", ""]);
     } catch (err) {
       console.error(err);
       alert("保存に失敗しました");
@@ -291,7 +354,7 @@ export default function NewsClient() {
       setUploadPct(null);
       setUploadTask(null);
     }
-  }, [title, body, draftFile, editingId, user, colRef]);
+  }, [title, body, draftFile, editingId, user, colRef, previewURL]);
 
   /* =====================================================
       削除
@@ -299,20 +362,23 @@ export default function NewsClient() {
   const handleDelete = useCallback(
     async (n: NewsItem) => {
       if (!user || !confirm("本当に削除しますか？")) return;
+
       await deleteDoc(doc(colRef, n.id));
-      if (n.mediaUrl)
+      if (n.mediaUrl) {
         try {
-          await deleteObject(ref(getStorage(), n.mediaUrl));
+          await deleteObject(ref(getStorage(), n.mediaUrl as any));
         } catch {}
-      // ★ onSnapshot が反映してくれるが、体感を良くするために即時反映
+      }
       setItems((prev) => prev.filter((m) => m.id !== n.id));
     },
     [user, colRef]
   );
 
+
   /* =====================================================
       レンダリング
   ===================================================== */
+
   if (!gradient) return <CardSpinner />;
 
   return (
@@ -364,6 +430,7 @@ export default function NewsClient() {
                 user={user}
                 openEdit={openEdit}
                 handleDelete={handleDelete}
+                isDark={isDark}
               />
             ))}
           </AnimatePresence>
@@ -387,87 +454,66 @@ export default function NewsClient() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 overflow-y-auto">
           <div
             className="bg-white rounded-lg p-6 w-full max-w-md space-y-4 my-8
-              max-h-[90vh] overflow-y-auto"
+                max-h-[90vh] overflow-y-auto"
           >
             <h3 className="text-xl font-bold text-center">
               {editingId ? "お知らせを編集" : "お知らせを追加"}
             </h3>
 
-            {/* 入力欄 */}
+            {/* ---------- 入力欄 ---------- */}
             <input
               className="w-full border px-3 py-2 rounded"
-              placeholder="タイトル"
+              placeholder="タイトル（翻訳は末尾に改行で追記されます）"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
             />
             <textarea
               className="w-full border px-3 py-2 rounded h-40"
-              placeholder="本文"
+              placeholder="本文（翻訳は末尾に新しい段落として追記されます）"
               value={body}
               onChange={(e) => setBody(e.target.value)}
             />
 
-            {/* メディア選択（プレビューなし／ファイル名のみ表示） */}
+            {/* ---------- メディア選択 ---------- */}
             <div className="space-y-1">
               <label className="font-medium">画像 / 動画 (30秒以内)</label>
 
-              {draftFile && (
-                <p className="text-xs text-gray-600 flex items-center gap-1 truncate">
-                  {ALLOWED_VIDEO.includes(draftFile.type) ? (
-                    <VideoIcon className="h-3.5 w-3.5" />
-                  ) : (
-                    <ImageIcon className="h-3.5 w-3.5" />
-                  )}
-                  選択中: <span className="truncate">{draftFile.name}</span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      // 選択解除
-                      setDraftFile(null);
-                      const input = document.getElementById(
-                        "media-upload"
-                      ) as HTMLInputElement | null;
-                      if (input) input.value = "";
-                    }}
-                    className="ml-2 text-xs text-gray-500 underline"
-                  >
-                    クリア
-                  </button>
+              {previewURL && (
+                <p className="text-xs text-gray-600 truncate">
+                  選択中: {draftFile?.name}
                 </p>
               )}
 
-              <div className="flex items-center gap-3">
-                <input
-                  id="media-upload"
-                  type="file"
-                  className="sr-only"
-                  accept={[...ALLOWED_IMG, ...ALLOWED_VIDEO].join(",")}
-                  onChange={(e) =>
-                    e.target.files?.[0] && handleSelectFile(e.target.files[0])
-                  }
-                />
+              <input
+                type="file"
+                accept={[...ALLOWED_IMG, ...ALLOWED_VIDEO].join(",")}
+                onChange={(e) =>
+                  e.target.files?.[0] && handleSelectFile(e.target.files[0])
+                }
+              />
 
-                <button
-                  type="button"
-                  onClick={() =>
-                    document.getElementById("media-upload")?.click()
-                  }
-                  className="inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm font-medium shadow-sm
-               bg-white hover:bg-gray-50 border-gray-300 text-gray-900"
-                >
-                  <Upload className="h-4 w-4" />
-                  ファイルを選択
-                </button>
-
-                {!draftFile && (
-                  <span className="text-xs text-gray-500">
-                    30秒以内 / 画像・動画に対応（プレビューは表示しません）
-                  </span>
-                )}
-              </div>
+              {previewURL &&
+                (draftFile && ALLOWED_VIDEO.includes(draftFile.type) ? (
+                  <video
+                    src={previewURL}
+                    className="w-full mt-2 rounded"
+                    controls
+                  />
+                ) : (
+                  <div className="relative w-full mt-2 rounded overflow-hidden">
+                    <Image
+                      src={previewURL}
+                      alt="preview"
+                      fill
+                      sizes="100vw"
+                      className="object-cover"
+                      unoptimized
+                    />
+                  </div>
+                ))}
             </div>
 
-            {/* AI 生成 */}
+            {/* ---------- AI 生成ボタン ---------- */}
             <button
               onClick={() => {
                 if (!title.trim()) {
@@ -481,6 +527,8 @@ export default function NewsClient() {
               AIで本文作成
             </button>
 
+
+            {/* ---------- バリデーションエラー ---------- */}
             {alertVisible && (
               <Alert variant="destructive">
                 <AlertCircle />
@@ -491,6 +539,7 @@ export default function NewsClient() {
               </Alert>
             )}
 
+            {/* ---------- 送信 / キャンセル ---------- */}
             <div className="flex flex-col gap-2">
               <button
                 onClick={handleSubmit}
@@ -510,9 +559,10 @@ export default function NewsClient() {
         </div>
       )}
 
+
       {/* ===== AI モーダル ===== */}
       {showAIModal && (
-        <div className="fixed inset-0 z-[999] flex items-center justify-center bg-black/50">
+        <div className="fixed inset-0 z-[55] flex items-center justify-center bg-black/50">
           <div className="bg-white rounded-2xl p-6 w-full max-w-md space-y-4 shadow-2xl">
             <h3 className="text-xl font-bold text-center">AIで本文を生成</h3>
 
@@ -586,17 +636,19 @@ export default function NewsClient() {
   );
 }
 
-/* ===== カード ===== */
+/* ===== カード用サブコンポーネント ===== */
 function NewsCard({
   item,
   user,
   openEdit,
   handleDelete,
+  isDark,
 }: {
   item: NewsItem;
   user: User | null;
   openEdit: (n: NewsItem) => void;
   handleDelete: (n: NewsItem) => void;
+  isDark: boolean;
 }) {
   const ref = useRef<HTMLLIElement>(null);
   const inView = useInView(ref, { once: true, margin: "0px 0px -150px 0px" });
@@ -608,10 +660,15 @@ function NewsCard({
       animate={inView ? { opacity: 1, y: 0 } : { opacity: 0, y: 40 }}
       transition={{ duration: 0.6, ease: "easeOut" }}
       exit={{ opacity: 0, y: 40 }}
-      className="bg-white/50 p-6 rounded-lg shadow"
+      className={`p-6 rounded-lg shadow border ${
+        isDark
+          ? "bg-gray-800 text-white border-gray-700"
+          : "bg-white text-gray-900 border-gray-200"
+      }`}
     >
-      <h2 className="font-bold">{item.title}</h2>
+      <h2 className="font-bold whitespace-pre-wrap">{item.title}</h2>
 
+      {/* メディア（画像 / 動画） */}
       {item.mediaUrl && (
         <MediaWithSpinner
           src={item.mediaUrl}
@@ -629,6 +686,7 @@ function NewsCard({
 
       <p className="mt-2 whitespace-pre-wrap">{item.body}</p>
 
+      {/* 編集・削除ボタン（ログイン時のみ） */}
       {user && (
         <div className="mt-4 flex gap-2">
           <button
